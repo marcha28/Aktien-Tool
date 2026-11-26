@@ -153,10 +153,10 @@ async function viewStock(t){
   $("#back").onclick=()=>go("watch");
   const now=Math.floor(Date.now()/1000),yr=now-400*86400;
   const day=ts=>new Date(ts*1000).toISOString().slice(0,10);
-  let q,candles;
+  let q,candles,candleErr=null;
   try{q=await fh("quote",{symbol:t});$("#q").innerHTML=`${f(q.c)} ${pc(q.dp)} <span class="mut"> · Vortag ${f(q.pc)} · Tag ${f(q.l)}–${f(q.h)}</span>`}catch(e){$("#q").innerHTML=`<span class="dn">${esc(e.message)}</span>`}
   try{candles=await fh("candles",{symbol:t});if(candles.s!=="ok")throw new Error(candles.error||"Keine Tageskerzen geliefert")}
-  catch(e){$("#body").innerHTML=`<div class="card"><b>Tageskerzen nicht verfügbar</b><p class="mut">${esc(e.message)}<br>Prüfe den Tab „Status" (Twelve-Data-Key gesetzt?).</p></div>`;candles=null}
+  catch(e){candleErr=e.message;candles=null}
   let d=null,earn=null;
   if(candles){
     d={t:candles.t,o:candles.o,h:candles.h,l:candles.l,c:candles.c,v:candles.v};
@@ -174,6 +174,7 @@ async function viewStock(t){
   const today=day(now),nxt=cal.find(x=>x.date>=today);
   if(nxt)earn={days:Math.round((new Date(nxt.date)-new Date(today))/86400000),date:nxt.date,hour:nxt.hour};
   let html="";
+  if(candleErr)html+=`<div class="card"><b>Tageskerzen nicht verfügbar</b><p class="mut">${esc(candleErr)}<br>Prüfe den Tab „Status".</p></div>`;
   if(earn)html+=`<div class="card">Nächste Earnings: <b>${esc(earn.date)}</b> (${earn.days} Tage${earn.hour==="bmo"?", vor Börsenöffnung":earn.hour==="amc"?", nach Börsenschluss":""})</div>`;
   if(d){
     const sc=scenarios(d,earn),i=sc.ind;
