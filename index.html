@@ -155,8 +155,8 @@ async function viewStock(t){
   const day=ts=>new Date(ts*1000).toISOString().slice(0,10);
   let q,candles;
   try{q=await fh("quote",{symbol:t});$("#q").innerHTML=`${f(q.c)} ${pc(q.dp)} <span class="mut"> · Vortag ${f(q.pc)} · Tag ${f(q.l)}–${f(q.h)}</span>`}catch(e){$("#q").innerHTML=`<span class="dn">${esc(e.message)}</span>`}
-  try{candles=await fh("stock/candle",{symbol:t,resolution:"D",from:yr,to:now});if(candles.s!=="ok")throw new Error("Keine Tageskerzen geliefert ("+candles.s+")")}
-  catch(e){$("#body").innerHTML=`<div class="card"><b>Tageskerzen nicht verfügbar</b><p class="mut">${esc(e.message)}<br>Vermutlich nicht im Gratis-Tarif enthalten – siehe Tab „Status".</p></div>`;candles=null}
+  try{candles=await fh("candles",{symbol:t});if(candles.s!=="ok")throw new Error(candles.error||"Keine Tageskerzen geliefert")}
+  catch(e){$("#body").innerHTML=`<div class="card"><b>Tageskerzen nicht verfügbar</b><p class="mut">${esc(e.message)}<br>Prüfe den Tab „Status" (Twelve-Data-Key gesetzt?).</p></div>`;candles=null}
   let d=null,earn=null;
   if(candles){
     d={t:candles.t,o:candles.o,h:candles.h,l:candles.l,c:candles.c,v:candles.v};
@@ -221,7 +221,7 @@ async function viewCal(){
 
 /* ---------- Status / Diagnose ---------- */
 async function viewDiag(){
-  $("#v").innerHTML=`<h2>Datenstatus</h2><div class="card"><p class="mut">Prüft, welche Finnhub-Daten dein Tarif liefert.</p><button id="run">Diagnose starten</button><pre id="o"></pre></div>`;
+  $("#v").innerHTML=`<h2>Datenstatus</h2><div class="card"><p class="mut">Prüft, welche Daten (Finnhub, Twelve Data) verfügbar sind.</p><button id="run">Diagnose starten</button><pre id="o"></pre></div>`;
   $("#run").onclick=async()=>{$("#o").textContent="Läuft…";
     try{const r=await fh("diagnose",{});$("#o").textContent=Object.entries(r).map(([k,v])=>`${v.status===200?"✅":"❌"} ${k}  (HTTP ${v.status})\n   ${String(v.sample).slice(0,110).replace(/\n/g," ")}`).join("\n\n")}
     catch(e){$("#o").textContent=e.message}}}
