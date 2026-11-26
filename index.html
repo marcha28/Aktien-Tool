@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Aktien-Tool</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--tx:#e8eaed;--mut:#8b93a1;--up:#2ecc71;--dn:#ff5c5c;--ac:#5b9dff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 -apple-system,system-ui,sans-serif;padding-bottom:70px}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 14px;display:flex;justify-content:space-between;align-items:center;z-index:5}
+h1{font-size:17px;margin:0}h2{font-size:15px;margin:18px 0 8px}
+main{padding:12px 14px;max-width:760px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mut{color:var(--mut);font-size:13px}.up{color:var(--up)}.dn{color:var(--dn)}
+input,button{font:inherit;border-radius:10px;border:1px solid var(--line);background:#0c0e12;color:var(--tx);padding:10px 12px}
+input{width:100%}button{background:var(--ac);border:0;color:#fff;cursor:pointer}
+button.sec{background:var(--card);border:1px solid var(--line);color:var(--tx)}
+button.sm{padding:6px 10px;font-size:13px}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;border-radius:0;color:var(--mut);padding:14px 4px}
+nav button.on{color:var(--tx);border-top:2px solid var(--ac)}
+.tick{font-weight:600}.hide{display:none}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:right}
+td:first-child,th:first-child{text-align:left}
+#chart{height:280px;margin-bottom:8px}
+.sc{border-left:3px solid var(--ac);padding-left:10px;margin:10px 0}
+.sc.no{border-color:var(--dn)}.sc.go{border-color:var(--up)}
+.tag{display:inline-block;background:#222836;border-radius:6px;padding:1px 7px;font-size:12px;margin-right:4px}
+pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--mut)}
+a{color:var(--ac)}
+.disc{font-size:12px;color:var(--mut);margin-top:16px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const SB_URL="https://rwdgadfzdjsppdmnbrnz.supabase.co";
+const SB_KEY="sb_publishable_s0l4ftRQasQ_HWLGjAsCNA_dB6PHQu3";
+const sb=supabase.createClient(SB_URL,SB_KEY);
+const SUGGEST=["AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","AVGO","AMD","NFLX","ORCL","PLTR","JPM","LLY","COST"];
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const f=(n,d=2)=>n==null||isNaN(n)?"–":Number(n).toLocaleString("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d});
+const pc=n=>n==null||isNaN(n)?"–":`<span class="${n>=0?"up":"dn"}">${n>=0?"+":""}${f(n)} %</span>`;
+let session=null,watch=[],tab="watch",cache={};
+
+/* ---------- Finnhub über Edge Function ---------- */
+async function fh(path,params={}){
+  const k=path+JSON.stringify(params);
+  const c=cache[k];if(c&&Date.now()-c.t<60000)return c.v;
+  const {data:{session:s}}=await sb.auth.getSession();
+  const r=await fetch(`${SB_URL}/functions/v1/finnhub`,{method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":"Bearer "+s.access_token,"apikey":SB_KEY},
+    body:JSON.stringify({path,params})});
+  const t=await r.text();let v;try{v=JSON.parse(t)}catch{v=t}
+  if(!r.ok)throw new Error((v&&v.error)||("HTTP "+r.status+" "+String(t).slice(0,120)));
+  cache[k]={t:Date.now(),v};return v;
+}
+
+/* ---------- Indikatoren ---------- */
+const sma=(a,n)=>a.map((_,i)=>i<n-1?null:a.slice(i-n+1,i+1).reduce((x,y)=>x+y,0)/n);
+function rsi(c,n=14){if(c.length<=n)return null;let g=0,l=0;
+  for(let i=1;i<=n;i++){const d=c[i]-c[i-1];d>=0?g+=d:l-=d}
+  g/=n;l/=n;
+  for(let i=n+1;i<c.length;i++){const d=c[i]-c[i-1];g=(g*(n-1)+Math.max(d,0))/n;l=(l*(n-1)+Math.max(-d,0))/n}
+  return l===0?100:100-100/(1+g/l)}
+function atr(h,l,c,n=14){if(c.length<=n)return null;const tr=[];
+  for(let i=1;i<c.length;i++)tr.push(Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])));
+  let a=tr.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<tr.length;i++)a=(a*(n-1)+tr[i])/n;return a}
+function levels(h,l,c){ // einfache Swing-Hoch/Tief-Levels der letzten 60 Tage
+  const n=c.length,from=Math.max(2,n-60),res=[],sup=[];
+  for(let i=from;i<n-2;i++){
+    if(h[i]>h[i-1]&&h[i]>h[i-2]&&h[i]>h[i+1]&&h[i]>h[i+2])res.push(h[i]);
+    if(l[i]<l[i-1]&&l[i]<l[i-2]&&l[i]<l[i+1]&&l[i]<l[i+2])sup.push(l[i])}
+  const last=c[n-1];
+  return{res:res.filter(x=>x>last).sort((a,b)=>a-b),sup:sup.filter(x=>x<last).sort((a,b)=>b-a)}}
+
+/* ---------- Szenarien (regelbasiert, keine Empfehlung) ---------- */
+function scenarios(d,earn){
+  const {c,h,l}=d,n=c.length,last=c[n-1],a=atr(h,l,c),r=rsi(c);
+  const s20=sma(c,20)[n-1],s50=sma(c,50)[n-1],lv=levels(h,l,c);
+  const hi20=Math.max(...h.slice(-20)),lo20=Math.min(...l.slice(-20));
+  const out=[];
+  const near=earn&&earn.days!=null&&earn.days>=0&&earn.days<=3;
+  if(near)out.push({t:"no",h:"Kein Einstieg vor Earnings",b:`Earnings in ${earn.days} Tag(en). Kursreaktion ist ein Münzwurf mit Gap-Risiko; Stop-Kurse greifen bei Gaps nicht zuverlässig. Erst nach der Reaktion neu bewerten.`});
+  if(r>75)out.push({t:"no",h:"Überhitzt",b:`RSI ${f(r,0)}: Einstieg jetzt bietet ein schlechtes Chance-Risiko-Verhältnis. Besser auf Rücksetzer Richtung ${f(s20)} (20-Tage-Linie) warten.`});
+  if(r<25)out.push({t:"no",h:"Fallendes Messer",b:`RSI ${f(r,0)}: stark überverkauft, aber ohne Stabilisierung kein Einstieg. Warten auf höheres Tief oder Schlusskurs über ${f(s20)}.`});
+  const up=s20&&s50&&last>s20&&s20>s50;
+  // Breakout
+  {const e=hi20*1.001,st=e-1.5*a,t1=e+2*a,t2=lv.res.find(x=>x>t1)??e+3*a;
+   out.push({t:up?"go":"",h:"Szenario A – Ausbruch",b:`Einstieg, wenn der Kurs über ${f(e)} (20-Tage-Hoch) schließt. Stop ${f(st)} (1,5 × ATR). Ziele ${f(t1)} und ${f(t2)}. CRV ca. ${f((t1-e)/(e-st),1)} : 1.${up?" Trend (Kurs > SMA20 > SMA50) spricht dafür.":" Trend ist nicht eindeutig aufwärts – Ausbruch eher skeptisch sehen."}`})}
+  // Pullback
+  {const sp=lv.sup[0]??lo20,e=Math.max(sp,s20??sp),st=sp-0.5*a,t1=Math.min(hi20,e+2*a);
+   out.push({t:"",h:"Szenario B – Rücksetzer",b:`Einstieg bei Stabilisierung nahe ${f(e)} (20-Tage-Linie bzw. Unterstützung ${f(sp)}). Stop ${f(st)}. Ziel ${f(t1)}. CRV ca. ${f((t1-e)/(e-st),1)} : 1. Gilt nur, solange der Kurs nicht unter ${f(sp)} schließt.`})}
+  // Short / Bruch
+  out.push({t:"",h:"Szenario C – Bruch nach unten",b:`Schließt der Kurs unter ${f(lo20)} (20-Tage-Tief), ist die Seitwärts-/Aufwärtsstruktur gebrochen: Long-Ideen verwerfen, nächstes Level ${f(lv.sup[1]??lo20-2*a)}.`});
+  return{out,ind:{last,s20,s50,r,a,atrPct:a/last*100,hi20,lo20,lv}}}
+
+/* ---------- Auth ---------- */
+function loginView(){
+  $("#app").innerHTML=`<main><div class="card" style="margin-top:12vh"><h1>Aktien-Tool</h1><p class="mut">Anmeldung</p>
+  <input id="em" type="email" placeholder="E-Mail" autocomplete="email"><div style="height:8px"></div>
+  <input id="pw" type="password" placeholder="Passwort (min. 8 Zeichen)" autocomplete="current-password"><div style="height:10px"></div>
+  <div class="row"><button id="in">Anmelden</button><button id="up" class="sec">Registrieren</button></div><p id="msg" class="mut"></p></div></main>`;
+  $("#in").onclick=async()=>{const {error}=await sb.auth.signInWithPassword({email:$("#em").value,password:$("#pw").value});if(error)$("#msg").textContent=error.message};
+  $("#up").onclick=async()=>{const {data,error}=await sb.auth.signUp({email:$("#em").value,password:$("#pw").value});
+    $("#msg").textContent=error?error.message:(data.session?"":"Bitte E-Mail bestätigen, dann anmelden.")};
+}
+
+/* ---------- Layout ---------- */
+function shell(){
+  $("#app").innerHTML=`<header><h1>Aktien-Tool</h1><button class="sec sm" id="out">Abmelden</button></header><main id="v"></main>
+  <nav><button data-t="watch">Watchlist</button><button data-t="cal">Earnings</button><button data-t="diag">Status</button></nav>`;
+  $("#out").onclick=()=>sb.auth.signOut();
+  document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>go(b.dataset.t));
+  go(tab);
+}
+function go(t,arg){tab=t;document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
+  ({watch:viewWatch,cal:viewCal,diag:viewDiag,stock:()=>viewStock(arg)})[t]()}
+
+async function loadWatch(){const {data}=await sb.from("watchlist").select("*").order("created_at");watch=data||[]}
+
+/* ---------- Watchlist ---------- */
+async function viewWatch(){
+  await loadWatch();
+  $("#v").innerHTML=`<div class="row" style="margin-bottom:10px"><input id="q" placeholder="Ticker oder Firmenname (z. B. NVDA, Tesla)"><button id="add">+</button></div><div id="res"></div>
+  <div id="list"></div>${watch.length?"":`<div class="card"><p>Noch leer.</p><button id="sug">Vorschlagsliste laden (Mag7 + 8 weitere)</button></div>`}
+  <p class="disc">Analyse- und Szenarioinstrument, keine Anlageberatung oder Kaufempfehlung. Daten können verzögert oder fehlerhaft sein.</p>`;
+  if($("#sug"))$("#sug").onclick=async()=>{await sb.from("watchlist").insert(SUGGEST.map(t=>({ticker:t})));viewWatch()};
+  $("#add").onclick=search;$("#q").onkeydown=e=>{if(e.key==="Enter")search()};
+  const list=$("#list");
+  for(const w of watch){
+    list.insertAdjacentHTML("beforeend",`<div class="card row" data-t="${esc(w.ticker)}" style="cursor:pointer"><div><span class="tick">${esc(w.ticker)}</span><div class="mut">${esc(w.name||"")}</div></div><div id="p-${esc(w.ticker)}" style="text-align:right">…</div></div>`)}
+  list.querySelectorAll(".card").forEach(el=>el.onclick=()=>go("stock",el.dataset.t));
+  for(const w of watch){try{const q=await fh("quote",{symbol:w.ticker});const el=document.getElementById("p-"+w.ticker);
+    if(el&&tab==="watch")el.innerHTML=`${f(q.c)}<div>${pc(q.dp)}</div>`}catch(e){const el=document.getElementById("p-"+w.ticker);if(el)el.innerHTML=`<span class="mut">n/a</span>`}}
+}
+async function search(){
+  const q=$("#q").value.trim();if(!q)return;
+  try{const r=await fh("search",{q});const items=(r.result||[]).filter(x=>!x.symbol.includes(".")).slice(0,6);
+    $("#res").innerHTML=items.map(x=>`<div class="card row"><div><span class="tick">${esc(x.symbol)}</span> <span class="mut">${esc(x.description)}</span></div><button class="sm" data-s="${esc(x.symbol)}" data-n="${esc(x.description)}">Hinzufügen</button></div>`).join("")||`<p class="mut">Nichts gefunden.</p>`;
+    $("#res").querySelectorAll("button").forEach(b=>b.onclick=async()=>{await sb.from("watchlist").insert({ticker:b.dataset.s,name:b.dataset.n});viewWatch()})
+  }catch(e){$("#res").innerHTML=`<p class="dn">${esc(e.message)}</p>`}}
+
+/* ---------- Aktien-Detail ---------- */
+async function viewStock(t){
+  $("#v").innerHTML=`<button class="sec sm" id="back">← Zurück</button><h2 style="margin-top:12px">${esc(t)}</h2><div id="q" class="mut">Lade…</div><div id="chart"></div><div id="body"></div>`;
+  $("#back").onclick=()=>go("watch");
+  const now=Math.floor(Date.now()/1000),yr=now-400*86400;
+  const day=ts=>new Date(ts*1000).toISOString().slice(0,10);
+  let q,candles;
+  try{q=await fh("quote",{symbol:t});$("#q").innerHTML=`${f(q.c)} ${pc(q.dp)} <span class="mut"> · Vortag ${f(q.pc)} · Tag ${f(q.l)}–${f(q.h)}</span>`}catch(e){$("#q").innerHTML=`<span class="dn">${esc(e.message)}</span>`}
+  try{candles=await fh("stock/candle",{symbol:t,resolution:"D",from:yr,to:now});if(candles.s!=="ok")throw new Error("Keine Tageskerzen geliefert ("+candles.s+")")}
+  catch(e){$("#body").innerHTML=`<div class="card"><b>Tageskerzen nicht verfügbar</b><p class="mut">${esc(e.message)}<br>Vermutlich nicht im Gratis-Tarif enthalten – siehe Tab „Status".</p></div>`;candles=null}
+  let d=null,earn=null;
+  if(candles){
+    d={t:candles.t,o:candles.o,h:candles.h,l:candles.l,c:candles.c,v:candles.v};
+    const ch=LightweightCharts.createChart($("#chart"),{layout:{background:{color:"#0f1115"},textColor:"#8b93a1"},grid:{vertLines:{color:"#1b1f29"},horzLines:{color:"#1b1f29"}},timeScale:{borderColor:"#262b36"},rightPriceScale:{borderColor:"#262b36"}});
+    const cs=ch.addCandlestickSeries({upColor:"#2ecc71",downColor:"#ff5c5c",borderVisible:false,wickUpColor:"#2ecc71",wickDownColor:"#ff5c5c"});
+    cs.setData(d.t.map((x,i)=>({time:day(x),open:d.o[i],high:d.h[i],low:d.l[i],close:d.c[i]})));
+    for(const [n,col] of [[20,"#5b9dff"],[50,"#f5a623"]]){const s=ch.addLineSeries({color:col,lineWidth:1,priceLineVisible:false,lastValueVisible:false});
+      const m=sma(d.c,n);s.setData(d.t.map((x,i)=>m[i]==null?null:{time:day(x),value:m[i]}).filter(Boolean))}
+    ch.timeScale().fitContent();
+  }
+  // Earnings-Termine + Historie
+  let cal=[],eh=[];
+  try{const c=await fh("calendar/earnings",{symbol:t,from:day(now-800*86400),to:day(now+120*86400)});cal=(c.earningsCalendar||[]).sort((a,b)=>a.date<b.date?-1:1)}catch(e){}
+  try{eh=await fh("stock/earnings",{symbol:t,limit:12})}catch(e){}
+  const today=day(now),nxt=cal.find(x=>x.date>=today);
+  if(nxt)earn={days:Math.round((new Date(nxt.date)-new Date(today))/86400000),date:nxt.date,hour:nxt.hour};
+  let html="";
+  if(earn)html+=`<div class="card">Nächste Earnings: <b>${esc(earn.date)}</b> (${earn.days} Tage${earn.hour==="bmo"?", vor Börsenöffnung":earn.hour==="amc"?", nach Börsenschluss":""})</div>`;
+  if(d){
+    const sc=scenarios(d,earn),i=sc.ind;
+    html+=`<div class="card"><span class="tag">RSI ${f(i.r,0)}</span><span class="tag">ATR ${f(i.a)} (${f(i.atrPct,1)} %)</span><span class="tag">SMA20 ${f(i.s20)}</span><span class="tag">SMA50 ${f(i.s50)}</span>
+      <div class="mut" style="margin-top:6px">Widerstände: ${i.lv.res.slice(0,3).map(x=>f(x)).join(" · ")||"–"}<br>Unterstützungen: ${i.lv.sup.slice(0,3).map(x=>f(x)).join(" · ")||"–"}</div></div>
+      <h2>Szenarien</h2><div class="card">${sc.out.map(s=>`<div class="sc ${s.t}"><b>${esc(s.h)}</b><div>${esc(s.b)}</div></div>`).join("")}</div>`;
+    // Earnings-Reaktionen
+    const rows=[];
+    for(const e of cal.filter(x=>x.date<today).slice(-12).reverse()){
+      const idx=d.t.findIndex(x=>day(x)>=e.date);if(idx<1)continue;
+      let a0,a1;
+      if(e.hour==="bmo"){a0=d.c[idx-1];a1=d.c[idx]}else{a0=d.c[idx];a1=d.c[idx+1]}
+      if(a0==null||a1==null)continue;
+      const gap=e.hour==="bmo"?(d.o[idx]/d.c[idx-1]-1)*100:(d.o[idx+1]!=null?(d.o[idx+1]/d.c[idx]-1)*100:null);
+      const sur=e.epsActual!=null&&e.epsEstimate?((e.epsActual-e.epsEstimate)/Math.abs(e.epsEstimate))*100:null;
+      rows.push({date:e.date,hour:e.hour,sur,gap,mv:(a1/a0-1)*100})}
+    if(rows.length){const avg=rows.reduce((s,r)=>s+Math.abs(r.mv),0)/rows.length,ups=rows.filter(r=>r.mv>0).length;
+      html+=`<h2>Kursreaktion bei Earnings</h2><div class="card"><div class="mut" style="margin-bottom:6px">Ø Bewegung ${f(avg)} % (absolut) · ${ups} von ${rows.length} positiv · kleine Stichprobe, keine Prognose</div>
+      <table><tr><th>Datum</th><th>EPS-Überr.</th><th>Gap</th><th>Reaktion</th></tr>${rows.map(r=>`<tr><td>${esc(r.date)}</td><td>${r.sur==null?"–":pc(r.sur)}</td><td>${r.gap==null?"–":pc(r.gap)}</td><td>${pc(r.mv)}</td></tr>`).join("")}</table></div>`}
+    else html+=`<h2>Kursreaktion bei Earnings</h2><div class="card mut">Keine Earnings-Termine für die Auswertung verfügbar.</div>`;
+    // Tagesverlauf der letzten Tage
+    html+=`<h2>Auffälligkeiten (letzte 5 Handelstage)</h2><div class="card"><table><tr><th>Tag</th><th>Gap</th><th>Tag</th><th>Spanne</th><th>Vol. vs Ø20</th></tr>`;
+    const vAvg=d.v.slice(-25,-5).reduce((s,x)=>s+x,0)/20;
+    for(let k=d.c.length-1;k>=Math.max(1,d.c.length-5);k--){
+      const gap=(d.o[k]/d.c[k-1]-1)*100,dy=(d.c[k]/d.o[k]-1)*100,rg=(d.h[k]-d.l[k])/d.c[k-1]*100,vr=d.v[k]/vAvg;
+      html+=`<tr><td>${day(d.t[k]).slice(5)}</td><td>${pc(gap)}</td><td>${pc(dy)}</td><td>${f(rg,1)} %</td><td>${f(vr,1)}×</td></tr>`}
+    html+=`</table><p class="mut">Zeitfenster-Auswertung (z. B. Vorbörse, Eröffnung, Mittag) folgt mit Intraday-Daten.</p></div>`;
+  }
+  // News
+  try{const n=await fh("company-news",{symbol:t,from:day(now-7*86400),to:today});
+    html+=`<h2>News (7 Tage)</h2><div class="card">${(n||[]).slice(0,8).map(x=>`<div style="margin-bottom:10px"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.headline)}</a><div class="mut">${esc(x.source)} · ${new Date(x.datetime*1000).toLocaleString("de-DE",{dateStyle:"short",timeStyle:"short"})}</div></div>`).join("")||"<span class='mut'>Keine News.</span>"}</div>`}catch(e){}
+  html+=`<p class="disc">Regelbasierte Szenarien auf Basis von Tagesdaten. Keine Anlageberatung, keine Kauf- oder Verkaufsempfehlung.</p>`;
+  $("#body").innerHTML=html;
+}
+
+/* ---------- Earnings-Kalender ---------- */
+async function viewCal(){
+  await loadWatch();$("#v").innerHTML=`<h2>Earnings der nächsten 14 Tage</h2><div id="c" class="mut">Lade…</div>`;
+  const now=Math.floor(Date.now()/1000),day=ts=>new Date(ts*1000).toISOString().slice(0,10);
+  try{const r=await fh("calendar/earnings",{from:day(now),to:day(now+14*86400)});
+    const set=new Set(watch.map(w=>w.ticker));
+    const rows=(r.earningsCalendar||[]).filter(x=>set.has(x.symbol)).sort((a,b)=>a.date<b.date?-1:1);
+    $("#c").innerHTML=rows.length?`<div class="card"><table><tr><th>Datum</th><th>Aktie</th><th>Zeit</th><th>EPS-Schätzung</th></tr>${rows.map(x=>`<tr><td>${esc(x.date)}</td><td>${esc(x.symbol)}</td><td>${x.hour==="bmo"?"vor Öffnung":x.hour==="amc"?"nach Schluss":"–"}</td><td>${f(x.epsEstimate)}</td></tr>`).join("")}</table></div>`:`<div class="card">Keine Termine für deine Watchlist in den nächsten 14 Tagen.</div>`
+  }catch(e){$("#c").innerHTML=`<span class="dn">${esc(e.message)}</span>`}}
+
+/* ---------- Status / Diagnose ---------- */
+async function viewDiag(){
+  $("#v").innerHTML=`<h2>Datenstatus</h2><div class="card"><p class="mut">Prüft, welche Finnhub-Daten dein Tarif liefert.</p><button id="run">Diagnose starten</button><pre id="o"></pre></div>`;
+  $("#run").onclick=async()=>{$("#o").textContent="Läuft…";
+    try{const r=await fh("diagnose",{});$("#o").textContent=Object.entries(r).map(([k,v])=>`${v.status===200?"✅":"❌"} ${k}  (HTTP ${v.status})\n   ${String(v.sample).slice(0,110).replace(/\n/g," ")}`).join("\n\n")}
+    catch(e){$("#o").textContent=e.message}}}
+
+sb.auth.onAuthStateChange((_e,s)=>{session=s;s?shell():loginView()});
+sb.auth.getSession().then(({data})=>{if(!data.session)loginView()});
+</script>
+</body>
+</html>
