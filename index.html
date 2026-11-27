@@ -17,8 +17,8 @@ main{padding:12px 14px;max-width:760px;margin:auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .mut{color:var(--mut);font-size:13px}.up{color:var(--up)}.dn{color:var(--dn)}
-input,button{font:inherit;border-radius:10px;border:1px solid var(--line);background:#0c0e12;color:var(--tx);padding:10px 12px}
-input{width:100%}button{background:var(--ac);border:0;color:#fff;cursor:pointer}
+input,textarea,button{font:inherit;border-radius:10px;border:1px solid var(--line);background:#0c0e12;color:var(--tx);padding:10px 12px}
+input:not([type=checkbox]),textarea{width:100%}textarea{resize:vertical}button{background:var(--ac);border:0;color:#fff;cursor:pointer}
 button.sec{background:var(--card);border:1px solid var(--line);color:var(--tx)}
 button.sm{padding:6px 10px;font-size:13px}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
@@ -33,6 +33,15 @@ td:first-child,th:first-child{text-align:left}
 .tag{display:inline-block;background:#222836;border-radius:6px;padding:1px 7px;font-size:12px;margin-right:4px}
 pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--mut)}
 a{color:var(--ac)}
+.star{background:none;border:0;color:#f5a623;font-size:22px;padding:0 6px;line-height:1}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cd{min-height:62px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:3px;font-size:11px;overflow:hidden}
+.cd b{display:block;color:var(--mut);font-weight:400}.cd.today{border-color:var(--ac)}
+.ev{display:block;background:#222836;border-radius:4px;padding:0 3px;margin-top:2px;font-size:10px;cursor:pointer;overflow:hidden}
+.ev.fav{background:#5b4a14;color:#ffd77a}
+.card.hint{border-color:#f5a623}
+tr[data-t]{cursor:pointer}
+nav button{font-size:13px}
 .disc{font-size:12px;color:var(--mut);margin-top:16px}
 </style>
 </head>
@@ -115,42 +124,49 @@ function loginView(){
 /* ---------- Layout ---------- */
 function shell(){
   $("#app").innerHTML=`<header><h1>Aktien-Tool</h1><button class="sec sm" id="out">Abmelden</button></header><main id="v"></main>
-  <nav><button data-t="watch">Watchlist</button><button data-t="cal">Earnings</button><button data-t="diag">Status</button></nav>`;
+  <nav><button data-t="watch">Watchlist</button><button data-t="fav">★</button><button data-t="cal">Kalender</button><button data-t="notes">Notizen</button><button data-t="diag">Status</button></nav>`;
   $("#out").onclick=()=>sb.auth.signOut();
   document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>go(b.dataset.t));
   go(tab);
 }
 function go(t,arg){tab=t;document.querySelectorAll("nav button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
-  ({watch:viewWatch,cal:viewCal,diag:viewDiag,stock:()=>viewStock(arg)})[t]()}
+  ({watch:()=>viewWatch(false),fav:()=>viewWatch(true),cal:viewCal,notes:viewNotes,diag:viewDiag,stock:()=>viewStock(arg)})[t]()}
 
 async function loadWatch(){const {data}=await sb.from("watchlist").select("*").order("created_at");watch=data||[]}
 
-/* ---------- Watchlist ---------- */
-async function viewWatch(){
+/* ---------- Watchlist / Favoriten ---------- */
+async function toggleFav(w){const {error}=await sb.from("watchlist").update({favorite:!w.favorite}).eq("ticker",w.ticker);if(!error)w.favorite=!w.favorite}
+async function viewWatch(fav=false){
   await loadWatch();
-  $("#v").innerHTML=`<div class="row" style="margin-bottom:10px"><input id="q" placeholder="Ticker oder Firmenname (z. B. NVDA, Tesla)"><button id="add">+</button></div><div id="res"></div>
-  <div id="list"></div>${watch.length?"":`<div class="card"><p>Noch leer.</p><button id="sug">Vorschlagsliste laden (Mag7 + 8 weitere)</button></div>`}
-  <p class="disc">Analyse- und Szenarioinstrument, keine Anlageberatung oder Kaufempfehlung. Daten können verzögert oder fehlerhaft sein.</p>`;
-  if($("#sug"))$("#sug").onclick=async()=>{await sb.from("watchlist").insert(SUGGEST.map(t=>({ticker:t})));viewWatch()};
-  $("#add").onclick=search;$("#q").onkeydown=e=>{if(e.key==="Enter")search()};
+  const items=fav?watch.filter(w=>w.favorite):[...watch].sort((a,b)=>(b.favorite-a.favorite));
+  $("#v").innerHTML=`${fav?`<h2 style="margin-top:0">Favoriten</h2>`:`<div class="row" style="margin-bottom:10px"><input id="q" placeholder="Ticker oder Firmenname (z. B. NVDA, Tesla)"><button id="add">+</button></div><div id="res"></div>`}
+  <div id="list"></div>${items.length?"":(fav?`<div class="card mut">Noch keine Favoriten. Tippe in der Watchlist auf den Stern.</div>`:`<div class="card"><p>Noch leer.</p><button id="sug">Vorschlagsliste laden (Mag7 + 8 weitere)</button></div>`)}
+  <p class="disc">Analyse- und Szenarioinstrument, keine Anlageberatung oder Kaufempfehlung. Daten können verzögert oder fehlerhaft sein. Watchlist und Favoriten gelten für alle Nutzer gemeinsam.</p>`;
+  if($("#sug"))$("#sug").onclick=async()=>{await sb.from("watchlist").upsert(SUGGEST.map(t=>({ticker:t})),{onConflict:"ticker",ignoreDuplicates:true});viewWatch(fav)};
+  if(!fav){$("#add").onclick=search;$("#q").onkeydown=e=>{if(e.key==="Enter")search()}}
   const list=$("#list");
-  for(const w of watch){
-    list.insertAdjacentHTML("beforeend",`<div class="card row" data-t="${esc(w.ticker)}" style="cursor:pointer"><div><span class="tick">${esc(w.ticker)}</span><div class="mut">${esc(w.name||"")}</div></div><div id="p-${esc(w.ticker)}" style="text-align:right">…</div></div>`)}
+  for(const w of items){
+    list.insertAdjacentHTML("beforeend",`<div class="card row" data-t="${esc(w.ticker)}" style="cursor:pointer"><div class="row" style="justify-content:flex-start;gap:6px"><button class="star" data-s="${esc(w.ticker)}">${w.favorite?"★":"☆"}</button><div><span class="tick">${esc(w.ticker)}</span><div class="mut">${esc(w.name||"")}</div></div></div><div id="p-${esc(w.ticker)}" style="text-align:right">…</div></div>`)}
   list.querySelectorAll(".card").forEach(el=>el.onclick=()=>go("stock",el.dataset.t));
-  for(const w of watch){try{const q=await fh("quote",{symbol:w.ticker});const el=document.getElementById("p-"+w.ticker);
-    if(el&&tab==="watch")el.innerHTML=`${f(q.c)}<div>${pc(q.dp)}</div>`}catch(e){const el=document.getElementById("p-"+w.ticker);if(el)el.innerHTML=`<span class="mut">n/a</span>`}}
+  list.querySelectorAll(".star").forEach(b=>b.onclick=async e=>{e.stopPropagation();const w=watch.find(x=>x.ticker===b.dataset.s);await toggleFav(w);viewWatch(fav)});
+  for(const w of items){try{const q=await fh("quote",{symbol:w.ticker});const el=document.getElementById("p-"+w.ticker);
+    if(el&&(tab==="watch"||tab==="fav"))el.innerHTML=`${f(q.c)}<div>${pc(q.dp)}</div>`}catch(e){const el=document.getElementById("p-"+w.ticker);if(el)el.innerHTML=`<span class="mut">n/a</span>`}}
 }
 async function search(){
   const q=$("#q").value.trim();if(!q)return;
   try{const r=await fh("search",{q});const items=(r.result||[]).filter(x=>!x.symbol.includes(".")).slice(0,6);
     $("#res").innerHTML=items.map(x=>`<div class="card row"><div><span class="tick">${esc(x.symbol)}</span> <span class="mut">${esc(x.description)}</span></div><button class="sm" data-s="${esc(x.symbol)}" data-n="${esc(x.description)}">Hinzufügen</button></div>`).join("")||`<p class="mut">Nichts gefunden.</p>`;
-    $("#res").querySelectorAll("button").forEach(b=>b.onclick=async()=>{await sb.from("watchlist").insert({ticker:b.dataset.s,name:b.dataset.n});viewWatch()})
+    $("#res").querySelectorAll("button").forEach(b=>b.onclick=async()=>{await sb.from("watchlist").upsert({ticker:b.dataset.s,name:b.dataset.n},{onConflict:"ticker",ignoreDuplicates:true});viewWatch(false)})
   }catch(e){$("#res").innerHTML=`<p class="dn">${esc(e.message)}</p>`}}
 
 /* ---------- Aktien-Detail ---------- */
 async function viewStock(t){
-  $("#v").innerHTML=`<button class="sec sm" id="back">← Zurück</button><h2 style="margin-top:12px">${esc(t)}</h2><div id="q" class="mut">Lade…</div><div id="chart"></div><div id="body"></div>`;
+  if(!watch.length)await loadWatch();
+  const w0=watch.find(x=>x.ticker===t);
+  $("#v").innerHTML=`<div class="row"><button class="sec sm" id="back">← Zurück</button>${w0?`<button class="sec sm" id="rm">Entfernen</button>`:""}</div><h2 style="margin-top:12px">${esc(t)} ${w0?`<button class="star" id="fv">${w0.favorite?"★":"☆"}</button>`:""} <span class="mut" style="font-weight:400">${esc(w0?.name||"")}</span></h2><div id="q" class="mut">Lade…</div><div id="chart"></div><div id="body"></div>`;
   $("#back").onclick=()=>go("watch");
+  if($("#fv"))$("#fv").onclick=async()=>{await toggleFav(w0);$("#fv").textContent=w0.favorite?"★":"☆"};
+  if($("#rm"))$("#rm").onclick=async()=>{if(confirm(t+" aus der gemeinsamen Watchlist entfernen?")){await sb.from("watchlist").delete().eq("ticker",t);go("watch")}};
   const now=Math.floor(Date.now()/1000),yr=now-400*86400;
   const day=ts=>new Date(ts*1000).toISOString().slice(0,10);
   let q,candles,candleErr=null;
@@ -207,18 +223,57 @@ async function viewStock(t){
   try{const n=await fh("company-news",{symbol:t,from:day(now-7*86400),to:today});
     html+=`<h2>News (7 Tage)</h2><div class="card">${(n||[]).slice(0,8).map(x=>`<div style="margin-bottom:10px"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.headline)}</a><div class="mut">${esc(x.source)} · ${new Date(x.datetime*1000).toLocaleString("de-DE",{dateStyle:"short",timeStyle:"short"})}</div></div>`).join("")||"<span class='mut'>Keine News.</span>"}</div>`}catch(e){}
   html+=`<p class="disc">Regelbasierte Szenarien auf Basis von Tagesdaten. Keine Anlageberatung, keine Kauf- oder Verkaufsempfehlung.</p>`;
-  $("#body").innerHTML=html;
+  $("#body").innerHTML=html+`<h2>Notizen</h2><div id="nz"></div>`;renderNotes($("#nz"),t);
 }
 
-/* ---------- Earnings-Kalender ---------- */
+/* ---------- Earnings-Kalender (Monatsansicht) ---------- */
+let calOff=0;
 async function viewCal(){
-  await loadWatch();$("#v").innerHTML=`<h2>Earnings der nächsten 14 Tage</h2><div id="c" class="mut">Lade…</div>`;
-  const now=Math.floor(Date.now()/1000),day=ts=>new Date(ts*1000).toISOString().slice(0,10);
-  try{const r=await fh("calendar/earnings",{from:day(now),to:day(now+14*86400)});
-    const set=new Set(watch.map(w=>w.ticker));
-    const rows=(r.earningsCalendar||[]).filter(x=>set.has(x.symbol)).sort((a,b)=>a.date<b.date?-1:1);
-    $("#c").innerHTML=rows.length?`<div class="card"><table><tr><th>Datum</th><th>Aktie</th><th>Zeit</th><th>EPS-Schätzung</th></tr>${rows.map(x=>`<tr><td>${esc(x.date)}</td><td>${esc(x.symbol)}</td><td>${x.hour==="bmo"?"vor Öffnung":x.hour==="amc"?"nach Schluss":"–"}</td><td>${f(x.epsEstimate)}</td></tr>`).join("")}</table></div>`:`<div class="card">Keine Termine für deine Watchlist in den nächsten 14 Tagen.</div>`
-  }catch(e){$("#c").innerHTML=`<span class="dn">${esc(e.message)}</span>`}}
+  await loadWatch();
+  const now=new Date(),base=new Date(Date.UTC(now.getFullYear(),now.getMonth()+calOff,1));
+  const y=base.getUTCFullYear(),m=base.getUTCMonth(),last=new Date(Date.UTC(y,m+1,0));
+  const iso=d=>d.toISOString().slice(0,10),todayIso=iso(new Date());
+  $("#v").innerHTML=`<div class="row" style="margin-bottom:10px"><button class="sec sm" id="pm">←</button><h2 style="margin:0">${base.toLocaleDateString("de-DE",{month:"long",year:"numeric",timeZone:"UTC"})}</h2><button class="sec sm" id="nm">→</button></div><div id="c" class="mut">Lade…</div>`;
+  $("#pm").onclick=()=>{calOff--;viewCal()};$("#nm").onclick=()=>{calOff++;viewCal()};
+  if(!watch.length){$("#c").innerHTML=`<div class="card">Die Watchlist ist leer. Füge zuerst Aktien hinzu.</div>`;return}
+  try{
+    const map=new Map(watch.map(w=>[w.ticker,w]));
+    const res=await Promise.all(watch.map(w=>fh("calendar/earnings",{symbol:w.ticker,from:iso(base),to:iso(last)}).then(r=>r.earningsCalendar||[]).catch(()=>[])));
+    const ev=res.flat().filter(x=>map.has(x.symbol)).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.symbol<b.symbol?-1:1);
+    const by={};ev.forEach(x=>(by[x.date]=by[x.date]||[]).push(x));
+    const off=(base.getUTCDay()+6)%7;
+    let g=["Mo","Di","Mi","Do","Fr","Sa","So"].map(d=>`<div class="mut" style="text-align:center;font-size:11px">${d}</div>`).join("");
+    for(let i=0;i<off;i++)g+=`<div></div>`;
+    for(let d=1;d<=last.getUTCDate();d++){
+      const key=iso(new Date(Date.UTC(y,m,d)));
+      g+=`<div class="cd ${key===todayIso?"today":""}"><b>${d}</b>${(by[key]||[]).map(x=>`<span class="ev ${map.get(x.symbol).favorite?"fav":""}" data-t="${esc(x.symbol)}">${esc(x.symbol)}</span>`).join("")}</div>`}
+    const hour=h=>h==="bmo"?"vor Öffnung":h==="amc"?"nach Schluss":"–";
+    $("#c").innerHTML=`<div class="cal">${g}</div><h2>Termine im Monat</h2>`+(ev.length?`<div class="card"><table><tr><th>Datum</th><th>Aktie</th><th>Zeit</th><th>EPS-Schätzung</th></tr>${ev.map(x=>`<tr data-t="${esc(x.symbol)}"><td>${esc(x.date.slice(8,10)+"."+x.date.slice(5,7)+".")}</td><td>${map.get(x.symbol).favorite?"★ ":""}${esc(x.symbol)}</td><td>${hour(x.hour)}</td><td>${f(x.epsEstimate)}</td></tr>`).join("")}</table></div>`:`<div class="card mut">Keine Earnings von Aktien der Watchlist in diesem Monat.</div>`)+`<p class="mut">Gelb markiert = Favorit. Termine können sich noch verschieben.</p>`;
+    document.querySelectorAll("#c [data-t]").forEach(el=>el.onclick=()=>go("stock",el.dataset.t));
+  }catch(e){$("#c").innerHTML=`<span class="dn">${esc(e.message)}</span>`}
+}
+
+/* ---------- Notizen (für alle Nutzer sichtbar) ---------- */
+const nm=e=>{const x=String(e||"?").split("@")[0].split(/[._-]/)[0];return x.charAt(0).toUpperCase()+x.slice(1)};
+async function renderNotes(el,ticker){
+  let q=sb.from("notes").select("*").order("created_at",{ascending:false}).limit(100);
+  if(ticker)q=q.eq("ticker",ticker);
+  const {data,error}=await q,me=session?.user?.id;
+  el.innerHTML=`<div class="card"><textarea id="nb" rows="3" placeholder="Notiz schreiben…"></textarea>
+    ${ticker?"":`<input id="nt" placeholder="Ticker (optional, z. B. NVDA)" style="margin-top:6px">`}
+    <label class="mut" style="display:block;margin:8px 0"><input type="checkbox" id="nf" style="width:auto;margin-right:6px">Hinweis an den anderen (hervorgehoben)</label>
+    <button id="ns">Speichern</button><p id="nmsg" class="mut"></p></div><div id="nl">${error?`<span class="dn">${esc(error.message)}</span>`:""}</div>`;
+  $("#nl").insertAdjacentHTML("beforeend",(data||[]).map(n=>`<div class="card ${n.for_other?"hint":""}"><div class="row"><span><span class="tag">${esc(nm(n.author))}${n.user_id===me?" (du)":""}</span>${n.ticker&&!ticker?`<span class="tag" data-t="${esc(n.ticker)}" style="cursor:pointer">${esc(n.ticker)}</span>`:""}${n.for_other?`<span class="tag">Hinweis</span>`:""}</span><span class="mut">${esc(new Date(n.created_at).toLocaleString("de-DE",{dateStyle:"short",timeStyle:"short"}))}</span></div><div style="white-space:pre-wrap;margin-top:6px">${esc(n.body)}</div>${n.user_id===me?`<button class="sec sm" data-del="${esc(n.id)}" style="margin-top:8px">Löschen</button>`:""}</div>`).join("")||(error?"":`<div class="card mut">Noch keine Notizen.</div>`));
+  $("#ns").onclick=async()=>{
+    const body=$("#nb").value.trim();if(!body)return;
+    const tk=ticker||($("#nt")?.value.trim().toUpperCase()||null);
+    const {error:e}=await sb.from("notes").insert({body,ticker:tk,for_other:$("#nf").checked});
+    if(e){$("#nmsg").textContent=e.message;return}
+    renderNotes(el,ticker)};
+  el.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("Notiz löschen?")){await sb.from("notes").delete().eq("id",b.dataset.del);renderNotes(el,ticker)}});
+  el.querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>go("stock",b.dataset.t));
+}
+function viewNotes(){$("#v").innerHTML=`<h2 style="margin-top:0">Notizen</h2><p class="mut">Alle Notizen sind für euch beide sichtbar. Löschen kann jeder nur die eigenen.</p><div id="nz"></div>`;renderNotes($("#nz"),null)}
 
 /* ---------- Status / Diagnose ---------- */
 async function viewDiag(){
